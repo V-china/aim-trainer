@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>FPS Aim Trainer - 练枪定位</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;user-select:none}
+body{background:#0a0a12;color:#fff;font-family:'Segoe UI',Arial,sans-serif;overflow:hidden;height:100vh}
+canvas{display:block;cursor:none}
+#ui{position:absolute;top:0;left:0;width:100%;height:100%;display:flex;align-items:center;justify-content:center;z-index:10}
+.menu{background:rgba(10,10,18,.97);padding:40px 50px;border-radius:16px;border:1px solid #333;text-align:center;min-width:480px}
+.menu h1{font-size:36px;color:#ff4655;margin-bottom:4px;text-shadow:0 0 30px rgba(255,70,85,.5)}
+.menu h2{font-size:13px;color:#666;font-weight:normal;margin-bottom:24px;letter-spacing:2px}
+.mode-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin:16px 0}
+.mode-card{background:#151520;border:2px solid #333;border-radius:10px;padding:16px;cursor:pointer;transition:all .2s}
+.mode-card:hover{border-color:#ff4655;transform:scale(1.03)}
+.mode-card.sel{border-color:#ff4655;background:#1a1020}
+.mode-card .icon{font-size:28px}
+.mode-card .name{font-size:14px;font-weight:bold;margin:4px 0}
+.mode-card .desc{font-size:11px;color:#888}
+.btn{display:block;width:100%;padding:14px;margin:8px 0;font-size:17px;background:#ff4655;color:#fff;border:none;border-radius:10px;cursor:pointer;font-weight:bold;letter-spacing:1px;transition:all .2s}
+.btn:hover{background:#ff5a67;transform:scale(1.02)}
+.btn-sec{background:#222;border:1px solid #444}
+.btn-sec:hover{background:#333}
+.settings{display:flex;gap:16px;justify-content:center;margin:12px 0;flex-wrap:wrap}
+.settings label{color:#aaa;font-size:13px;display:flex;align-items:center;gap:6px}
+.settings select{background:#1a1a2a;color:#fff;border:1px solid #444;padding:4px 8px;border-radius:4px}
+.stat-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:16px 0}
+.stat-box{background:#151520;border-radius:8px;padding:12px}
+.stat-box .val{font-size:28px;font-weight:bold;color:#ff4655}
+.stat-box .lbl{font-size:11px;color:#888;margin-top:2px}
+.rank{font-size:16px;margin:10px 0;padding:8px 20px;border-radius:20px;display:inline-block}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="ui"><div id="menu"></div></div>
+<script>
+const canvas=document.getElementById('c'),ctx=canvas.getContext('2d');
+let W,H;
+function resize(){W=canvas.width=window.innerWidth;H=canvas.height=window.innerHeight}
+resize();window.addEventListener('resize',resize);
+
+let mx=W/2,my=H/2,mDown=false;
+let gameState='menu',mode='flick',difficulty='medium',duration=30;
+let targets=[],score=0,hits=0,shots=0,combo=0,maxCombo=0,startTime=0,timeLeft=0;
+let particles=[],hitMarkers=[],crossAlpha=1;
+let audioCtx=null;
+
+function initAudio(){if(!audioCtx)audioCtx=new(window.AudioContext||window.webkitAudioContext)()}
+function playSound(freq,dur,vol=.15){
+if(!audioCtx)return;
+const o=audioCtx.createOscillator(),g=audioCtx.createGain();
+o.connect(g);g.connect(audioCtx.destination);
+o.frequency.value=freq;o.type='sine';g.gain.value=vol;
+o.start();g.gain.exponentialRampToValueAtTime(.001,audioCtx.currentTime+dur);o.stop(audioCtx.currentTime+dur)}
+function playHit(){playSound(800,.08,.2);playSound(1200,.05,.1)}
+function playMiss(){playSound(200,.1,.1)}
+function playKill(){playSound(600,.05,.15);playSound(900,.08,.1);playSound(1200,.06,.1)}
+
+const MODES={
+flick:{name:'Flick Shot',icon:'🎯',desc:'目标随机出现，快速点击',spawnRate:800,targetLife:2000,targetSize:28,moveSpd:0,multi:1},
+speed:{name:'Speed',icon:'⚡',desc:'小目标快速闪现',spawnRate:500,targetLife:1200,targetSize:18,moveSpd:0,multi:1},
+tracking:{name:'Tracking',icon:'🔄',desc:'追踪移动目标',spawnRate:1200,targetLife:4000,targetSize:24,moveSpd:3,multi:1},
+micro:{name:'Micro Flick',icon:'🔬',desc:'近距离微调瞄准',spawnRate:600,targetLife:1500,targetSize:14,moveSpd:0,multi:1},
+multi:{name:'Multi Kill',icon:'💥',desc:'同屏多目标',spawnRate:400,targetLife:3000,targetSize:24,moveSpd:0,multi:5},
+reflex:{name:'Reflex',icon:'🧠',desc:'目标闪现后立刻消失',spawnRate:1000,targetLife:700,targetSize:32,moveSpd:0,multi:1},
+};
+const DIFF={easy:{szMul:1.4,spdMul:.6,lifeMul:1.5},medium:{szMul:1,spdMul:1,lifeMul:1},hard:{szMul:.7,spdMul:1.4,lifeMul:.7}};
+
+canvas.addEventListener('mousemove',e=>{mx=e.clientX;my=e.clientY});
+canvas.addEventListener('mousedown',e=>{
+if(e.button!==0)return;mDown=true;initAudio();
+if(gameState==='playing')shoot()});
+canvas.addEventListener('mouseup',()=>{mDown=false});
+canvas.addEventListener('contextmenu',e=>e.preventDefault());
+
+class Target{
+constructor(){
+const m=MODES[mode],d=DIFF[difficulty];
+const pad=80;
+this.x=pad+Math.random()*(W-pad*2);
+this.y=pad+Math.random()*(H-pad*2);
+this.r=m.targetSize*d.szMul;
+this.maxR=this.r;
+this.life=m.targetLife*d.lifeMul;
+this.maxLife=this.life;
+this.vx=(Math.random()-.5)*m.moveSpd*d.spdMul*2;
+this.vy=(Math.random()-.5)*m.moveSpd*d.spdMul*2;
+this.hit=false;this.pop=0;this.spawn=1;this.born=Date.now();
+}
+update(dt){
+if(this.hit){this.pop+=dt*.008;return this.pop<1}
+this.life-=dt;this.spawn=Math.min(1,this.spawn+dt*.006);
+this.x+=this.vx;this.y+=this.vy;
+if(this.x<this.r||this.x>W-this.r)this.vx*=-1;
+if(this.y<this.r||this.y>H-this.r)this.vy*=-1;
+if(this.life<=0){combo=0;return false}
+return true}
+draw(){
+const pct=this.life/this.maxLife;
+const s=this.hit?1-this.pop:this.spawn;
+ctx.save();ctx.translate(this.x,this.y);ctx.scale(s,s);ctx.globalAlpha=this.hit?.5:Math.min(1,s);
+// Outer ring
+ctx.beginPath();ctx.arc(0,0,this.r+6,0,Math.PI*2);
+ctx.strokeStyle=`rgba(255,70,85,${pct*.5})`;ctx.lineWidth=2;ctx.stroke();
+// Timer ring
+ctx.beginPath();ctx.arc(0,0,this.r+6,-Math.PI/2,-Math.PI/2+Math.PI*2*pct);
+ctx.strokeStyle='#ff4655';ctx.lineWidth=2.5;ctx.stroke();
+// Body
+const grd=ctx.createRadialGradient(0,0,0,0,0,this.r);
+grd.addColorStop(0,'#ff4655');grd.addColorStop(.6,'#ff4655');grd.addColorStop(1,'#cc2233');
+ctx.beginPath();ctx.arc(0,0,this.r,0,Math.PI*2);ctx.fillStyle=grd;ctx.fill();
+// Inner dot
+ctx.beginPath();ctx.arc(0,0,this.r*.3,0,Math.PI*2);ctx.fillStyle='#fff';ctx.fill();
+// Inner ring
+ctx.beginPath();ctx.arc(0,0,this.r*.6,0,Math.PI*2);ctx.strokeStyle='rgba(255,255,255,.4)';ctx.lineWidth=1.5;ctx.stroke();
+if(this.hit){ctx.fillStyle='#fff';ctx.font='bold 16px Arial';ctx.textAlign='center';ctx.fillText('+'+Math.floor(100*(1+combo*.1)),0,5)}
+ctx.globalAlpha=1;ctx.restore()}}
+
+function shoot(){
+shots++;let hitAny=false;
+for(let i=targets.length-1;i>=0;i--){
+const t=targets[i];if(t.hit)continue;
+const d=Math.sqrt((mx-t.x)**2+(my-t.y)**2);
+if(d<=t.r+4){
+t.hit=true;hits++;combo++;maxCombo=Math.max(maxCombo,combo);
+const pts=Math.floor(100*(1+combo*.1));score+=pts;hitAny=true;
+playHit();if(combo>=3)playKill();
+for(let j=0;j<12;j++){const a=Math.random()*Math.PI*2,s=2+Math.random()*5;
+particles.push({x:t.x,y:t.y,vx:Math.cos(a)*s,vy:Math.sin(a)*s,life:20+Math.random()*15,col:'#ff4655',sz:2+Math.random()*3})}
+hitMarkers.push({x:mx,y:my,t:15});break}}
+if(!hitAny){combo=0;playMiss();
+for(let j=0;j<4;j++)particles.push({x:mx,y:my,vx:(Math.random()-.5)*3,vy:(Math.random()-.5)*3,life:8,col:'#666',sz:2});
+hitMarkers.push({x:mx,y:my,t:10,miss:true})}}
+
+let lastSpawn=0;
+function spawnTarget(){
+const m=MODES[mode];
+const max=m.multi;
+const alive=targets.filter(t=>!t.hit).length;
+if(alive<max)targets.push(new Target())}
+
+function startGame(){
+gameState='playing';targets=[];particles=[];hitMarkers=[];
+score=0;hits=0;shots=0;combo=0;maxCombo=0;
+startTime=Date.now();timeLeft=duration;lastSpawn=0;
+document.getElementById('ui').style.display='none';
+canvas.requestPointerLock&&canvas.requestPointerLock()}
+
+function endGame(){
+gameState='result';
+document.exitPointerLock&&document.exitPointerLock();
+showResult()}
+
+let lastT=0;
+function loop(ts){
+const dt=Math.min(ts-lastT,50);lastT=ts;
+if(gameState==='playing'){
+timeLeft=duration-(Date.now()-startTime)/1000;
+if(timeLeft<=0){endGame();requestAnimationFrame(loop);return}
+if(Date.now()-lastSpawn>MODES[mode].spawnRate*DIFF[difficulty].lifeMul*.5){lastSpawn=Date.now();spawnTarget()}
+for(let i=targets.length-1;i>=0;i--)if(!targets[i].update(dt))targets.splice(i,1);
+for(let i=particles.length-1;i>=0;i--){const p=particles[i];p.x+=p.vx;p.y+=p.vy;p.vy+=.1;p.life--;if(p.life<=0)particles.splice(i,1)}
+for(let i=hitMarkers.length-1;i>=0;i--){hitMarkers[i].t--;if(hitMarkers[i].t<=0)hitMarkers.splice(i,1)}
+drawGame()}
+requestAnimationFrame(loop)}
+requestAnimationFrame(loop);
+
+function drawGame(){
+ctx.fillStyle='#0a0a12';ctx.fillRect(0,0,W,H);
+// Grid
+ctx.strokeStyle='rgba(255,255,255,.03)';ctx.lineWidth=1;
+for(let x=0;x<W;x+=60){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,H);ctx.stroke()}
+for(let y=0;y<H;y+=60){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke()}
+// Targets
+for(const t of targets)t.draw();
+// Particles
+for(const p of particles){ctx.globalAlpha=p.life/20;ctx.fillStyle=p.col;
+ctx.fillRect(p.x-p.sz/2,p.y-p.sz/2,p.sz,p.sz)}ctx.globalAlpha=1;
+// Hit markers
+for(const h of hitMarkers){ctx.save();ctx.translate(h.x,h.y);ctx.rotate(Math.PI/4);
+const s=h.miss?6:10,a=h.t/(h.miss?10:15);ctx.globalAlpha=a;
+ctx.strokeStyle=h.miss?'#666':'#fff';ctx.lineWidth=2;
+ctx.beginPath();ctx.moveTo(-s,0);ctx.lineTo(s,0);ctx.moveTo(0,-s);ctx.lineTo(0,s);ctx.stroke();
+ctx.globalAlpha=1;ctx.restore()}
+// Crosshair
+ctx.save();ctx.translate(mx,my);
+ctx.strokeStyle='#0f0';ctx.lineWidth=1.5;ctx.globalAlpha=.9;
+ctx.beginPath();ctx.arc(0,0,10,0,Math.PI*2);ctx.stroke();
+ctx.beginPath();ctx.moveTo(-16,0);ctx.lineTo(-6,0);ctx.moveTo(6,0);ctx.lineTo(16,0);
+ctx.moveTo(0,-16);ctx.lineTo(0,-6);ctx.moveTo(0,6);ctx.lineTo(0,16);ctx.stroke();
+ctx.fillStyle='#0f0';ctx.beginPath();ctx.arc(0,0,1.5,0,Math.PI*2);ctx.fill();
+ctx.globalAlpha=1;ctx.restore();
+// HUD
+ctx.fillStyle='rgba(0,0,0,.5)';ctx.fillRect(0,0,W,44);
+ctx.fillStyle='#ff4655';ctx.font='bold 20px Arial';ctx.textAlign='left';
+ctx.fillText('SCORE: '+score,16,30);
+ctx.fillStyle='#fff';ctx.font='bold 18px Arial';ctx.textAlign='center';
+const t=Math.max(0,timeLeft);
+ctx.fillText(Math.floor(t/60)+':'+String(Math.floor(t%60)).padStart(2,'0'),W/2,29);
+ctx.textAlign='right';
+const acc=shots>0?Math.round(hits/shots*100):0;
+ctx.fillStyle=acc>=70?'#0f0':acc>=40?'#fa0':'#f44';
+ctx.fillText('ACC: '+acc+'%',W-120,29);
+ctx.fillStyle='#ff4655';ctx.fillText('x'+combo,W-16,29);
+// Combo bar
+if(combo>=2){ctx.fillStyle='rgba(255,70,85,.3)';ctx.fillRect(W/2-80,38,160,4);
+ctx.fillStyle='#ff4655';ctx.fillRect(W/2-80,38,Math.min(160,combo*16),4)}}
+
+function getRank(acc,spm){
+if(acc>=85&&spm>=25)return{name:'Radiant',color:'#ffe47a',bg:'#3a3520'};
+if(acc>=75&&spm>=20)return{name:'Immortal',color:'#ff4655',bg:'#2a1520'};
+if(acc>=65&&spm>=15)return{name:'Diamond',color:'#b478ff',bg:'#201530'};
+if(acc>=55&&spm>=10)return{name:'Platinum',color:'#3aeadf',bg:'#152a2a'};
+if(acc>=45&&spm>=8)return{name:'Gold',color:'#ffc844',bg:'#2a2515'};
+if(acc>=35)return{name:'Silver',color:'#bbb',bg:'#1a1a1a'};
+return{name:'Bronze',color:'#cd7f32',bg:'#1a1510'}}
+
+function showResult(){
+document.getElementById('ui').style.display='flex';
+const acc=shots>0?Math.round(hits/shots*100):0;
+const spm=Math.round(hits/duration*60);
+const avgReact=hits>0?Math.round(duration/hits*1000):0;
+const rank=getRank(acc,spm);
+document.getElementById('menu').innerHTML=`<div class="menu">
+<h1>ROUND COMPLETE</h1>
+<div class="rank" style="background:${rank.bg};color:${rank.color};border:1px solid ${rank.color}">${rank.name}</div>
+<div class="stat-grid">
+<div class="stat-box"><div class="val">${score}</div><div class="lbl">总分</div></div>
+<div class="stat-box"><div class="val">${acc}%</div><div class="lbl">命中率</div></div>
+<div class="stat-box"><div class="val">${hits}/${shots}</div><div class="lbl">命中/射击</div></div>
+<div class="stat-box"><div class="val">${spm}</div><div class="lbl">击杀/分钟</div></div>
+<div class="stat-box"><div class="val">${maxCombo}x</div><div class="lbl">最大连击</div></div>
+<div class="stat-box"><div class="val">${avgReact}ms</div><div class="lbl">平均反应</div></div>
+</div>
+<button class="btn" onclick="startGame()">⚡ 再来一局</button>
+<button class="btn btn-sec" onclick="showMenu()">🔙 返回菜单</button></div>`}
+
+function showMenu(){
+gameState='menu';document.getElementById('ui').style.display='flex';
+document.exitPointerLock&&document.exitPointerLock();
+const modeCards=Object.entries(MODES).map(([k,m])=>`<div class="mode-card${k===mode?' sel':''}" onclick="mode='${k}';showMenu()">
+<div class="icon">${m.icon}</div><div class="name">${m.name}</div><div class="desc">${m.desc}</div></div>`).join('');
+document.getElementById('menu').innerHTML=`<div class="menu" style="min-width:520px">
+<h1>🎯 AIM TRAINER</h1><h2>FPS 练枪定位训练器</h2>
+<div class="mode-grid">${modeCards}</div>
+<div class="settings">
+<label>难度 <select onchange="difficulty=this.value">
+<option value="easy"${difficulty==='easy'?' selected':''}>简单</option>
+<option value="medium"${difficulty==='medium'?' selected':''}>中等</option>
+<option value="hard"${difficulty==='hard'?' selected':''}>困难</option></select></label>
+<label>时长 <select onchange="duration=+this.value">
+<option value="15"${duration===15?' selected':''}>15秒</option>
+<option value="30"${duration===30?' selected':''}>30秒</option>
+<option value="60"${duration===60?' selected':''}>60秒</option>
+<option value="120"${duration===120?' selected':''}>120秒</option></select></label>
+</div>
+<button class="btn" onclick="startGame()">⚡ 开始训练</button>
+<div style="margin-top:12px;color:#555;font-size:11px">鼠标瞄准 | 左键射击 | ESC返回</div></div>`}
+
+document.addEventListener('keydown',e=>{if(e.key==='Escape'&&gameState==='playing'){gameState='menu';showMenu()}});
+document.addEventListener('pointerlockchange',()=>{
+if(!document.pointerLockElement&&gameState==='playing'){
+canvas.addEventListener('mousemove',function handler(e){mx=e.clientX;my=e.clientY})}});
+
+showMenu();
+</script>
+</body>
+</html>
