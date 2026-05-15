@@ -29,15 +29,19 @@ canvas{display:block;touch-action:none}
 .stat-box .val{font-size:22px;font-weight:bold;color:#ff4655}
 .stat-box .lbl{font-size:10px;color:#888;margin-top:2px}
 .rank{font-size:15px;margin:8px 0;padding:6px 18px;border-radius:20px;display:inline-block}
-#fireBtn{position:absolute;left:16px;top:60px;width:80px;height:80px;border-radius:50%;background:rgba(255,70,85,.8);border:3px solid #ff4655;color:#fff;font-size:14px;font-weight:bold;z-index:20;display:none;touch-action:none;cursor:pointer}
-#fireBtn:active{background:rgba(255,70,85,1);transform:scale(.9)}
-#scopeBtn{position:absolute;left:16px;top:155px;width:60px;height:60px;border-radius:50%;background:rgba(255,255,255,.15);border:2px solid rgba(255,255,255,.3);color:#fff;font-size:20px;z-index:20;display:none;touch-action:none;cursor:pointer}
+#fireBtn{position:absolute;right:16px;top:50px;width:90px;height:90px;border-radius:50%;background:rgba(255,70,85,.8);border:3px solid #ff4655;color:#fff;font-size:15px;font-weight:bold;z-index:20;display:none;touch-action:none;cursor:pointer;box-shadow:0 0 20px rgba(255,70,85,.3)}
+#fireBtn:active{background:rgba(255,70,85,1);transform:scale(.9);box-shadow:0 0 30px rgba(255,70,85,.6)}
+#sensArea{position:absolute;left:10px;bottom:20px;z-index:20;display:none;touch-action:none}
+#sensArea .sens-label{color:rgba(255,255,255,.5);font-size:10px;text-align:center;margin-bottom:4px}
+#sensArea input[type=range]{-webkit-appearance:none;width:100px;height:6px;background:rgba(255,255,255,.2);border-radius:3px;outline:none;transform:rotate(-90deg);transform-origin:50px 50px}
+#sensArea input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;height:18px;background:#ff4655;border-radius:50%;cursor:pointer}
+#sensVal{color:#ff4655;font-size:12px;font-weight:bold;text-align:center;margin-top:60px}
 </style>
 </head>
 <body>
 <canvas id="c"></canvas>
 <button id="fireBtn">FIRE</button>
-<button id="scopeBtn">+</button>
+<div id="sensArea"><div class="sens-label">灵敏度</div><input type="range" id="sensSlider" min="3" max="25" value="12" oninput="sensitivity=this.value/10;document.getElementById('sensVal').textContent=sensitivity.toFixed(1)"><div id="sensVal">1.2</div></div>
 <div id="ui"><div id="menu"></div></div>
 <script>
 const canvas=document.getElementById('c'),ctx=canvas.getContext('2d');
@@ -177,11 +181,11 @@ score=0;hits=0;shots=0;combo=0;maxCombo=0;crossX=0;crossY=0;
 startTime=Date.now();timeLeft=duration;lastSpawn=0;
 document.getElementById('ui').style.display='none';
 fireBtn.style.display='block';
-document.getElementById('scopeBtn').style.display='block'}
+document.getElementById('sensArea').style.display='block'}
 
 function endGame(){
 gameState='result';fireBtn.style.display='none';
-document.getElementById('scopeBtn').style.display='none';
+document.getElementById('sensArea').style.display='none';
 showResult()}
 
 let lastT=0;
@@ -272,7 +276,7 @@ document.getElementById('menu').innerHTML=`<div class="menu">
 
 function showMenu(){
 gameState='menu';document.getElementById('ui').style.display='flex';
-fireBtn.style.display='none';document.getElementById('scopeBtn').style.display='none';
+fireBtn.style.display='none';document.getElementById('sensArea').style.display='none';
 const modeCards=Object.entries(MODES).map(([k,m])=>`<div class="mode-card${k===mode?' sel':''}" onclick="mode='${k}';showMenu()">
 <div class="icon">${m.icon}</div><div class="name">${m.name}</div><div class="desc">${m.desc}</div></div>`).join('');
 document.getElementById('menu').innerHTML=`<div class="menu">
